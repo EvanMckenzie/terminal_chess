@@ -6,35 +6,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
 	"terminal_chess/internal/game"
+	"time"
+
+	"github.com/corentings/chess/v2"
+
+	"github.com/corentings/chess/v2/uci"
 )
-
-type Color string
-
-const (
-	Black Color = "black"
-	White Color = "white"
-)
-
-// implement the flag.Value interface with String() and Set()
-func (t *Color) String() string {
-	if *t == "" {
-		return string(White) // default fallback represenation for usage output
-	}
-	return string(*t)
-}
-
-func (t *Color) Set(value string) error {
-	normalized := Color(strings.ToLower(value))
-	switch normalized {
-	case Black, White:
-		*t = normalized
-		return nil
-	default:
-		return fmt.Errorf("Invalid team %q: must be either 'black' or 'white'", value)
-	}
-}
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	// TODO: implement this
@@ -53,8 +31,8 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	var timeLimit int
 	flagSet.IntVar(&timeLimit, "time-limit", 30, "Time limit for player turn in seconds (only valid if --timed is true)")
 
-	var playerColor Color = White // set default value
-	flagSet.Var(&playerColor, "color", "Select a color to play as: black or white. White moves first.")
+	var color string
+	flagSet.StringVar(&color, "color", "white", "Select a color to play as: [black | white]. White moves first.")
 
 	flagSet.Usage = func() {
 		fmt.Fprint(stderr, "Terminal Chess usage:\n")
@@ -75,48 +53,91 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if timeLimit <= 0 {
 			return fmt.Errorf("Invalid time-limit %d: must be greater than 0 when --timed is true", timeLimit)
 		}
-		fmt.Fprintf(stdout, "Game mode: Timed (%d seconds)\n", timeLimit)
 	}
 
-	isPlayerTurn := (playerColor == White) //  White goes first
+	// handle player color
+	var playerColor chess.Color
+	switch strings.ToLower(color) {
+	case "white":
+		playerColor = chess.White
+	case "black":
+		playerColor = chess.Black
+	default:
+		return fmt.Errorf("invalid color: %s", color)
+	}
+
+	playerTurn := (playerColor == chess.White) //  White goes first
 
 	// initialize game state
-	var state = game.NewGameState()
+	state := chess.NewGame()
+
+	// set up computer opponent
+	var skillLevel string
+	switch strings.ToLower(difficulty) {
+	case "easy":
+		skillLevel = "2"
+	case "medium":
+		skillLevel = "10"
+	case "hard":
+		skillLevel = "20"
+	default:
+		return fmt.Errorf("inavlid difficulty %q: must be one of [easy, medium, hard]", difficulty)
+	}
+
+	eng, err := uci.New("stockfish")
+	if err != nil {
+		return fmt.Errorf("failed to start UCI engine: %w", err)
+	}
+	defer eng.Close()
+
+	setSkill := uci.CmdSetOption{
+		Name:  "Skill Level",
+		Value: skillLevel,
+	}
+	if err := eng.Run(uci.CmdUCI, setSkill, uci.CmdIsReady, uci.CmdUCINewGame); err != nil {
+		return fmt.Errorf("failed to initialize UCI engine: %w", err)
+	}
+
+	// output game settings
+	fmt.Fprintf(stdout, "==Game Settings==\nPlayer Color: %vDifficulty:%v\nTimed: %v\n", color, difficulty, timed)
+	if timed {
+		fmt.Fprintf(stdout, "Time Limit: %v seconds\n", timeLimit)
+	}
 
 	// start game loop
-	fmt.Fprintln(stdout, "Starting game...")
+	fmt.Fprint(stdout, "\n\n==Game Start==\n\n")
 	for {
 
-		// check context for interrupt
-		select {
-		case <-ctx.Done():
-			fmt.Fprintln(stdout, "\nGame interrupted. Exiting...")
-			return ctx.Err()
-		default:
-			// do nothing and continue
-		}
-
 		// check game state for end conditions
-		if state.IsGameOver() {
-			fmt.Fprintln(stdout, "Game over!")
+		if state.Outcome() == "Checkmate" || state.Outcome() == "Stalemate" || state.Outcome() == "Resignation" {
+			fmt.Fprintf(stdout, "Game over! %s\n", state.Outcome())
 			break
 		}
 
-		var err error
-		if isPlayerTurn {
-			state, err = game.HandlePlayerTurn(ctx, state, stdin, stdout, stderr)
+		// set up timer for player turn, if needed
+		var playerTurnCtx context.Context
+		var cancel context.CancelFunc
+		if timed {
+			playerTurnCtx, cancel = context.WithTimeout(ctx, time.Duration(timeLimit)*time.Second)
+			defer cancel()
+		} else {
+			playerTurnCtx = ctx
+		}
+
+		if playerTurn {
+			err := game.HandlePlayerTurn(playerTurnCtx, state, playerColor, stdin, stdout, stderr)
 			if err != nil {
 				return err
 			}
 		} else {
-			state, err = game.HandleComputerTurn(ctx, state, stdout)
+			err := game.HandleComputerTurn(ctx, state, eng, stdout)
 			if err != nil {
 				return err
 			}
 		}
 
 		// rotate turn
-		isPlayerTurn = !isPlayerTurn
+		playerTurn = !playerTurn
 
 	}
 	return nil
