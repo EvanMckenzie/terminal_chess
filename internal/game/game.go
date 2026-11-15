@@ -41,6 +41,11 @@ func HandlePlayerTurn(ctx context.Context, state *chess.Game, playerColor chess.
 			if strings.EqualFold(playerMove, "board") {
 				fmt.Fprintln(stdout, state.Position().Board().Draw2(playerColor, true))
 				continue
+			} else if strings.EqualFold(playerMove, "exit") {
+				return fmt.Errorf("game exited")
+			} else if strings.EqualFold(playerMove, "resign") {
+				state.Resign(playerColor)
+				return nil
 			}
 
 			if err := state.PushNotationMove(playerMove, chess.AlgebraicNotation{}, nil); err != nil {

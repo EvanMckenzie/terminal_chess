@@ -15,7 +15,6 @@ import (
 )
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	// TODO: implement this
 
 	// set up cli flags
 	flagSet := flag.NewFlagSet("cli", flag.ContinueOnError)
@@ -29,10 +28,13 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flagSet.BoolVar(&timed, "timed", false, "Enable timed play mode")
 
 	var timeLimit int
-	flagSet.IntVar(&timeLimit, "time-limit", 30, "Time limit for player turn in seconds (only valid if --timed is true)")
+	flagSet.IntVar(&timeLimit, "time-limit", 30, "Time limit for player turn in seconds (only valid if -timed is true)")
 
 	var color string
-	flagSet.StringVar(&color, "color", "white", "Select a color to play as: [black | white]. White moves first.")
+	flagSet.StringVar(&color, "color", "white", "Select a color to play as: [black | white]")
+
+	var showBoard bool
+	flagSet.BoolVar(&showBoard, "show-board", true, "Show board state after each move")
 
 	flagSet.Usage = func() {
 		fmt.Fprint(stderr, "Terminal Chess usage:\n")
@@ -51,7 +53,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	// validate time-limit arg
 	if timed {
 		if timeLimit <= 0 {
-			return fmt.Errorf("Invalid time-limit %d: must be greater than 0 when --timed is true", timeLimit)
+			return fmt.Errorf("Invalid time-limit %d: must be greater than 0 when -timed is true", timeLimit)
 		}
 	}
 
@@ -99,9 +101,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	// output game settings
-	fmt.Fprintf(stdout, "==Game Settings==\nPlayer Color: %vDifficulty:%v\nTimed: %v\n", color, difficulty, timed)
+	fmt.Fprintf(stdout, "==Game Settings==\nPlayer Color: %v\nDifficulty:%v\nTimed: %v", color, difficulty, timed)
 	if timed {
-		fmt.Fprintf(stdout, "Time Limit: %v seconds\n", timeLimit)
+		fmt.Fprintf(stdout, "\nTime Limit: %v seconds\n", timeLimit)
 	}
 
 	// start game loop
@@ -109,8 +111,8 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	for {
 
 		// check game state for end conditions
-		if state.Outcome() == "Checkmate" || state.Outcome() == "Stalemate" || state.Outcome() == "Resignation" {
-			fmt.Fprintf(stdout, "Game over! %s\n", state.Outcome())
+		if state.Method().String() == "Checkmate" || state.Method().String() == "Stalemate" || state.Method().String() == "Resignation" {
+			fmt.Fprintf(stdout, "Game over! \nOutcome: %v\nMethod: %v\n", state.Outcome(), state.Method())
 			break
 		}
 
@@ -134,6 +136,10 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			if err != nil {
 				return err
 			}
+		}
+
+		if showBoard {
+			fmt.Fprintln(stdout, state.Position().Board().Draw2(playerColor, true))
 		}
 
 		// rotate turn
